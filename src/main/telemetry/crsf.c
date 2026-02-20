@@ -461,6 +461,24 @@ static void crsfFrameBatterySensor(sbuf_t *dst)
     sbufWriteU8(dst, batteryRemainingPercentage);
 }
 
+/*
+0x0E Battery cells
+Payload:
+uint8_t     source_id ( 0 = main battery )
+uint16_t    voltage ( mV * 1000 )
+*/
+static void crsfFrameCells(sbuf_t *dst)
+{
+    sbufWriteU8(dst, CRSF_FRAME_CELLS_PAYLOAD_SIZE + CRSF_FRAME_LENGTH_TYPE_CRC);
+    sbufWriteU8(dst, CRSF_FRAMETYPE_CELLS);
+    sbufWriteU8(dst, 0); // source_id: 0 = main battery
+    if (telemetryConfig()->report_cell_voltage) {
+        sbufWriteU16BigEndian(dst, (getBatteryAverageCellVoltage() * 10)); // cell voltage in units matching radio display
+    } else {
+        sbufWriteU16BigEndian(dst, getBatteryVoltage() * 10); // pack voltage, scaled for radio display
+    }
+}
+
 #if defined(USE_BARO) && defined(USE_VARIO)
 // pack altitude in decimeters into a 16-bit value.
 // Due to strange OpenTX behavior of count any 0xFFFF value as incorrect, the maximum sending value is limited to 0xFFFE (32766 meters)
@@ -927,6 +945,7 @@ typedef enum {
     CRSF_FRAME_ATTITUDE_INDEX = CRSF_FRAME_START_INDEX,
     CRSF_FRAME_BARO_ALTITUDE_INDEX,
     CRSF_FRAME_BATTERY_SENSOR_INDEX,
+    CRSF_FRAME_CELLS_INDEX,
     CRSF_FRAME_FLIGHT_MODE_INDEX,
     CRSF_FRAME_MAG_INDEX,
     CRSF_FRAME_GPS_INDEX,
@@ -1053,6 +1072,12 @@ static bool processCrsf(uint32_t currentTimeUs, uint32_t crsfLastCycleTime)
         crsfFinalize(dst);
     }
 
+    if (currentSchedule & BIT(CRSF_FRAME_CELLS_INDEX)) {
+        crsfInitializeFrame(dst);
+        crsfFrameCells(dst);
+        crsfFinalize(dst);
+    }
+
     if (currentSchedule & BIT(CRSF_FRAME_FLIGHT_MODE_INDEX)) {
         crsfInitializeFrame(dst);
         crsfFrameFlightMode(dst);
@@ -1172,6 +1197,7 @@ void initCrsfTelemetry(void)
     if ((isBatteryVoltageConfigured() && telemetryIsSensorEnabled(SENSOR_VOLTAGE))
         || (isAmperageConfigured() && telemetryIsSensorEnabled(SENSOR_CURRENT | SENSOR_FUEL))) {
         crsfSchedule[index++] = BIT(CRSF_FRAME_BATTERY_SENSOR_INDEX);
+        crsfSchedule[index++] = BIT(CRSF_FRAME_CELLS_INDEX);
     }
     if (telemetryIsSensorEnabled(SENSOR_MODE)) {
         crsfSchedule[index++] = BIT(CRSF_FRAME_FLIGHT_MODE_INDEX);
