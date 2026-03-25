@@ -299,10 +299,7 @@ void adcInit(const adcConfig_t *config)
         }
         ADC_RegularChannelConfig(adc.ADCx, adcOperatingConfig[i].adcChannel, rank++, adcOperatingConfig[i].sampleTime);
     }
-    ADC_DMARequestAfterLastTransferCmd(adc.ADCx, ENABLE);
 
-    ADC_DMACmd(adc.ADCx, ENABLE);
-    ADC_Cmd(adc.ADCx, ENABLE);
 
 #ifdef USE_DMA_SPEC
     const dmaChannelSpec_t *dmaSpec = dmaGetChannelSpecByPeripheral(DMA_PERIPH_ADC, device, config->dmaopt[device]);
@@ -353,6 +350,10 @@ void adcInit(const adcConfig_t *config)
     xDMA_Cmd(adc.dmaResource, ENABLE);
 #endif
 
+    ADC_DMARequestAfterLastTransferCmd(adc.ADCx, ENABLE);
+
+    ADC_DMACmd(adc.ADCx, ENABLE);
+    ADC_Cmd(adc.ADCx, ENABLE);
     ADC_SoftwareStartConv(adc.ADCx);
 }
 
