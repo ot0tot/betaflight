@@ -985,14 +985,14 @@ static bool processCrsf(uint32_t currentTimeUs, uint32_t crsfLastCycleTime)
 
 #ifdef USE_GPS
 #if defined(USE_CRSF_V3)
-    if (isCrsfV3Running && crsfTimedSchedule & BIT(CRSF_TIMED_FRAME_GPS_TIME_INDEX) && gpsSol.time != lastGpsSolnTime && gpsSol.dateTime.valid) {
+    if (crsfTimedSchedule & BIT(CRSF_TIMED_FRAME_GPS_TIME_INDEX) && gpsSol.time != lastGpsSolnTime && gpsSol.dateTime.valid) {
         crsfInitializeFrame(dst);
         crsfFrameGpsTime(dst);
         crsfFinalize(dst);
         crsfTimedSchedule &= ~BIT(CRSF_TIMED_FRAME_GPS_TIME_INDEX);
         return true;
     }
-    if (isCrsfV3Running && crsfTimedSchedule & BIT(CRSF_TIMED_FRAME_GPS_EXTENDED_INDEX) && gpsSol.time != lastGpsSolnTime) {
+    if (crsfTimedSchedule & BIT(CRSF_TIMED_FRAME_GPS_EXTENDED_INDEX) && gpsSol.time != lastGpsSolnTime) {
         crsfInitializeFrame(dst);
         crsfFrameGpsExtended(dst);
         crsfFinalize(dst);
@@ -1005,9 +1005,7 @@ static bool processCrsf(uint32_t currentTimeUs, uint32_t crsfLastCycleTime)
         crsfFrameGps(dst);
         crsfFinalize(dst);
 #if defined(USE_CRSF_V3)
-        if (isCrsfV3Running) {
-            crsfTimedSchedule |= (BIT(CRSF_TIMED_FRAME_GPS_EXTENDED_INDEX) | BIT(CRSF_TIMED_FRAME_GPS_TIME_INDEX));
-        }
+        crsfTimedSchedule |= (BIT(CRSF_TIMED_FRAME_GPS_EXTENDED_INDEX) | BIT(CRSF_TIMED_FRAME_GPS_TIME_INDEX));
 #endif
         lastGpsSolnTime = gpsSol.time;
         return true;
