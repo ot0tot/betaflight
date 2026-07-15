@@ -158,6 +158,13 @@ const char * const lookupTableOffOn[] = {
     "OFF", "ON"
 };
 
+#ifdef USE_MCO_DEVICE2
+static const char * const lookupTableMco2Source[] = {
+    "PLLI2S", "HSE"
+};
+STATIC_ASSERT(MCO2_SOURCE_COUNT == ARRAYLEN(lookupTableMco2Source), lookupTableMco2Source_count_mismatch);
+#endif
+
 #ifdef USE_DSHOT_TELEMETRY
 static const char * const lookupTableDshotEdt[] = {
     "OFF", "ON", "FORCE"
@@ -723,6 +730,9 @@ const lookupTableEntry_t lookupTables[] = {
 #endif // USE_WING
 #ifdef USE_TRANSPONDER
     LOOKUP_TABLE_ENTRY(lookupTableTransponderProvider),
+#endif
+#ifdef USE_MCO_DEVICE2
+    LOOKUP_TABLE_ENTRY(lookupTableMco2Source),
 #endif
 };
 
@@ -1923,6 +1933,7 @@ const clivalue_t valueTable[] = {
     { "mco_divider",    VAR_UINT8  | HARDWARE_VALUE, .config.minmaxUnsigned = { 0, MCO_DIVIDER_COUNT - 1 }, PG_MCO_CONFIG, PG_ARRAY_ELEMENT_OFFSET(mcoConfig_t, 0, divider) },
 #elif defined(USE_MCO_DEVICE2)
     { "mco2_on_pc9",    VAR_UINT8  | HARDWARE_VALUE | MODE_LOOKUP, .config.lookup = { TABLE_OFF_ON }, PG_MCO_CONFIG, PG_ARRAY_ELEMENT_OFFSET(mcoConfig_t, 1, enabled) },
+    { "mco2_source",     VAR_UINT8  | HARDWARE_VALUE | MODE_LOOKUP, .config.lookup = { TABLE_MCO2_SOURCE }, PG_MCO_CONFIG, PG_ARRAY_ELEMENT_OFFSET(mcoConfig_t, 1, source) },
 #endif
 #endif
 #ifdef USE_RX_SPEKTRUM

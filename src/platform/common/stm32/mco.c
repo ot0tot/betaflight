@@ -69,9 +69,6 @@ static void mcoConfigure(MCODevice_e device, const mcoConfig_t *config)
 
     IO_t io;
 
-    // Only configure MCO2 with PLLI2SCLK as source for now.
-    // Other MCO1 and other sources can easily be added.
-
     switch(device) {
     case MCODEV_1: // MCO1 on PA8
 #if defined(STM32G4)
@@ -80,26 +77,33 @@ static void mcoConfigure(MCODevice_e device, const mcoConfig_t *config)
         HAL_RCC_MCOConfig(RCC_MCO, mcoSources[config->source], mcoDividers[config->divider]);
 #endif
         break;
-    case MCODEV_2: // MCO2 on PC9
+    case MCODEV_2: { // MCO2 on PC9
 #if defined(STM32F4) || defined(STM32F7) || defined(APM32F4)
         io = IOGetByTag(DEFIO_TAG_E(PC9));
         IOInit(io, OWNER_MCO, 2);
 #if defined(STM32F7)
-        HAL_RCC_MCOConfig(RCC_MCO2, RCC_MCO2SOURCE_PLLI2SCLK, RCC_MCODIV_4);
+        const uint32_t mco2Source = config->source == MCO2_SOURCE_HSE ? RCC_MCO2SOURCE_HSE : RCC_MCO2SOURCE_PLLI2SCLK;
+        const uint32_t mco2Divider = config->source == MCO2_SOURCE_HSE ? RCC_MCODIV_1 : RCC_MCODIV_4;
+        HAL_RCC_MCOConfig(RCC_MCO2, mco2Source, mco2Divider);
         IOConfigGPIOAF(io, IO_CONFIG(GPIO_MODE_AF_PP, GPIO_SPEED_FREQ_VERY_HIGH,  GPIO_NOPULL), GPIO_AF0_MCO);
 #elif defined(APM32F4)
 #if defined(APM32F405xx) || defined(APM32F407xx) || defined(APM32F415xx) || defined(APM32F417xx) || \
     defined(APM32F465xx) || defined(APM32F411xx)
-        DAL_RCM_MCOConfig(RCM_MCO2, RCM_MCO2SOURCE_PLLI2SCLK, RCM_MCODIV_4);
+        const uint32_t mco2Source = config->source == MCO2_SOURCE_HSE ? RCM_MCO2SOURCE_HSE : RCM_MCO2SOURCE_PLLI2SCLK;
+        const uint32_t mco2Divider = config->source == MCO2_SOURCE_HSE ? RCM_MCODIV_1 : RCM_MCODIV_4;
+        DAL_RCM_MCOConfig(RCM_MCO2, mco2Source, mco2Divider);
         IOConfigGPIOAF(io, IO_CONFIG(GPIO_MODE_AF_PP, GPIO_SPEED_FREQ_VERY_HIGH,  GPIO_NOPULL), GPIO_AF0_MCO);
 #endif
 #else
         // All F4s
-        RCC_MCO2Config(RCC_MCO2Source_PLLI2SCLK, RCC_MCO2Div_4);
+        const uint32_t mco2Source = config->source == MCO2_SOURCE_HSE ? RCC_MCO2Source_HSE : RCC_MCO2Source_PLLI2SCLK;
+        const uint32_t mco2Divider = config->source == MCO2_SOURCE_HSE ? RCC_MCO2Div_1 : RCC_MCO2Div_4;
+        RCC_MCO2Config(mco2Source, mco2Divider);
         IOConfigGPIOAF(io, IO_CONFIG(GPIO_Mode_AF, GPIO_Speed_50MHz, GPIO_OType_PP, GPIO_PuPd_NOPULL), GPIO_AF_MCO);
 #endif
 #endif
         break;
+    }
     default:
         // No MCO configured
         return;

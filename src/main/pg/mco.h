@@ -26,6 +26,12 @@
 #include "pg/pg.h"
 #include "drivers/io_types.h"
 
+typedef enum {
+    MCO2_SOURCE_PLLI2S,
+    MCO2_SOURCE_HSE,
+    MCO2_SOURCE_COUNT,
+} mco2Source_e;
+
 typedef struct mcoConfig_s {
     uint8_t enabled;
     uint8_t source;
