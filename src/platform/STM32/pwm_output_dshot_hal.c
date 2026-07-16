@@ -98,12 +98,20 @@ FAST_CODE static void pwmDshotSetDirectionInput(
     motorDmaOutput_t * const motor
 )
 {
+#if !defined(STM32F7)
     LL_DMA_InitTypeDef* pDmaInit = &motor->dmaInitStruct;
+#endif
 
     const timerHardware_t * const timerHardware = motor->timerHardware;
     TIM_TypeDef *timer = (TIM_TypeDef *)timerHardware->tim;
 
+#if defined(STM32F7)
+    // Output and input share the channel, addresses, widths and increment modes.
+    // Switch direction and disable the output TC interrupt without rebuilding the stream.
+    CLEAR_BIT(((DMA_Stream_TypeDef *)motor->dmaRef)->CR, DMA_SxCR_DIR | DMA_SxCR_TCIE);
+#else
     xLL_EX_DMA_DeInit(motor->dmaRef);
+#endif
 
     motor->isInput = true;
     if (!inputStampUs) {
@@ -133,8 +141,10 @@ FAST_CODE static void pwmDshotSetDirectionInput(
     }
 #endif
 
+#if !defined(STM32F7)
     motor->dmaInitStruct.Direction = LL_DMA_DIRECTION_PERIPH_TO_MEMORY;
     xLL_EX_DMA_Init(motor->dmaRef, pDmaInit);
+#endif
 }
 #endif
 
