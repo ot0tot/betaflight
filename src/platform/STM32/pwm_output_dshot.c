@@ -52,7 +52,7 @@
 #if defined(STM32F4)
 #define DSHOT_DMA_DISABLE_TIMEOUT 1000
 
-FAST_CODE static void pwmDshotDisableDma(dmaResource_t *dmaRef)
+FAST_CODE static bool pwmDshotDisableDma(dmaResource_t *dmaRef)
 {
     xDMA_Cmd(dmaRef, DISABLE);
     for (unsigned timeout = DSHOT_DMA_DISABLE_TIMEOUT;
@@ -60,6 +60,8 @@ FAST_CODE static void pwmDshotDisableDma(dmaResource_t *dmaRef)
         timeout--) {
         // Configuration registers are write-protected until EN reads zero.
     }
+
+    return !(((DMA_Stream_TypeDef *)dmaRef)->CR & DMA_SxCR_EN);
 }
 #endif
 
@@ -104,15 +106,18 @@ FAST_CODE void pwmDshotSetDirectionOutput(
 #if defined(STM32F4)
     // A failed bidirectional capture is recovered from this normal frame path,
     // avoiding an interrupt storm when transfer errors recur every frame.
-    pwmDshotDisableDma(dmaRef);
+    if (!pwmDshotDisableDma(dmaRef)) {
+#ifdef USE_DSHOT_TELEMETRY
+        // isInput also acts as the not-ready state consumed by telemetry decode.
+        motor->isInput = true;
+#endif
+        return;
+    }
     dmaChannelDescriptor_t *descriptor = dmaGetDescriptorByIdentifier(dmaGetIdentifier(dmaRef));
     DMA_CLEAR_FLAG(descriptor, DMA_IT_FEIF | DMA_IT_DMEIF | DMA_IT_TEIF | DMA_IT_HTIF | DMA_IT_TCIF);
 #endif
     xDMA_DeInit(dmaRef);
 
-#ifdef USE_DSHOT_TELEMETRY
-    motor->isInput = false;
-#endif
     timerOCPreloadConfig(timer, timerHardware->channel, TIM_OCPreload_Disable);
     timerOCInit(timer, timerHardware->channel, pOcInit);
     timerOCPreloadConfig(timer, timerHardware->channel, TIM_OCPreload_Enable);
@@ -130,6 +135,11 @@ FAST_CODE void pwmDshotSetDirectionOutput(
 
     xDMA_Init(dmaRef, pDmaInit);
     xDMA_ITConfig(dmaRef, DMA_IT_TC, ENABLE);
+#ifdef USE_DSHOT_TELEMETRY
+    // Only expose the output state after every protected DMA register has been
+    // updated. A timed-out input stream remains pending and is retried later.
+    motor->isInput = false;
+#endif
 }
 
 #ifdef USE_DSHOT_TELEMETRY
@@ -219,8 +229,11 @@ FAST_CODE static void motor_DMA_IRQHandler(dmaChannelDescriptor_t *descriptor)
         }
 
 #if defined(STM32F4)
-        pwmDshotDisableDma(motor->dmaRef);
+        const bool dmaDisabled = pwmDshotDisableDma(motor->dmaRef);
         DMA_CLEAR_FLAG(descriptor, DMA_IT_FEIF | DMA_IT_DMEIF | DMA_IT_TEIF | DMA_IT_HTIF | DMA_IT_TCIF);
+        if (!dmaDisabled) {
+            return;
+        }
 #endif
 
 #ifdef USE_DSHOT_TELEMETRY

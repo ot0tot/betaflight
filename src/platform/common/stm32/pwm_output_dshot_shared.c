@@ -319,6 +319,11 @@ FAST_CODE_NOINLINE bool pwmTelemetryDecode(void)
             }
         }
         pwmDshotSetDirectionOutput(&dmaMotors[i]);
+        if (dmaMotors[i].isInput) {
+            // The DMA stream is still shutting down. Do not start another frame
+            // with its input configuration; retry from the scheduler instead.
+            return false;
+        }
     }
 
     dshotTelemetryState.rawValueState = DSHOT_RAW_VALUE_STATE_NOT_PROCESSED;

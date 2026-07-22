@@ -439,5 +439,6 @@ void adcGetChannelValues(void)
     ADC_DMARequestAfterLastTransferCmd(activeAdc, ENABLE);
     ADC_DMACmd(activeAdc, ENABLE);
     ADC_ITConfig(activeAdc, ADC_IT_OVR, ENABLE);
+    ADC_SoftwareStartConv(activeAdc);
 }
 #endif
