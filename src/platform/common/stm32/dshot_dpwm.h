@@ -135,6 +135,12 @@ typedef struct motorDmaOutput_s {
     volatile bool isInput;
     timeDelta_t dshotTelemetryDeadtimeUs;
     uint8_t dmaInputLen;
+#if defined(STM32F4)
+    volatile bool telemetryDmaCaptureActive;
+    volatile bool telemetryDmaFaultPending;
+    volatile uint8_t telemetryDmaQuarantineFrames;
+    uint8_t telemetryDmaFailureCount;
+#endif
 
 #ifdef USE_HAL_DRIVER
     LL_TIM_OC_InitTypeDef ocInitStruct;

@@ -66,6 +66,23 @@ FAST_DATA_ZERO_INIT uint32_t inputStampUs;
 FAST_DATA_ZERO_INIT dshotTelemetryCycleCounters_t dshotDMAHandlerCycleCounters;
 #endif
 
+#if defined(USE_DSHOT_TELEMETRY) && defined(STM32F4)
+#define DSHOT_TELEMETRY_DMA_BACKOFF_MIN 8
+#define DSHOT_TELEMETRY_DMA_BACKOFF_MAX 128
+
+static void pwmDshotQuarantineCaptureDma(motorDmaOutput_t *motor)
+{
+    unsigned backoff = DSHOT_TELEMETRY_DMA_BACKOFF_MIN << motor->telemetryDmaFailureCount;
+    if (backoff >= DSHOT_TELEMETRY_DMA_BACKOFF_MAX) {
+        backoff = DSHOT_TELEMETRY_DMA_BACKOFF_MAX;
+    } else {
+        motor->telemetryDmaFailureCount++;
+    }
+
+    motor->telemetryDmaQuarantineFrames = backoff;
+}
+#endif
+
 motorDmaOutput_t *getMotorDmaOutput(unsigned index)
 {
     if (index >= ARRAYLEN(dmaMotors)) {
@@ -285,6 +302,39 @@ FAST_CODE_NOINLINE bool pwmTelemetryDecode(void)
             return false;
         }
         if (dmaMotors[i].isInput) {
+            bool captureFault = false;
+#if defined(STM32F4)
+            TIM_TypeDef * const timer = (TIM_TypeDef *)dmaMotors[i].timerHardware->tim;
+            TIM_DMACmd(timer, dmaMotors[i].timerDmaSource, DISABLE);
+
+            uint32_t edges = 0;
+            const bool captureActive = dmaMotors[i].telemetryDmaCaptureActive;
+            captureFault = dmaMotors[i].telemetryDmaFaultPending;
+            if (captureActive) {
+                const dmaChannelDescriptor_t *descriptor = dmaGetDescriptorByIdentifier(dmaGetIdentifier(dmaMotors[i].dmaRef));
+                const unsigned channelIndex = dmaMotors[i].timerHardware->channel >> 2;
+                const uint32_t overcaptureFlag = TIM_SR_CC1OF << channelIndex;
+
+                captureFault |= DMA_GET_FLAG_STATUS(descriptor, DMA_IT_FEIF | DMA_IT_DMEIF | DMA_IT_TEIF) != 0;
+                captureFault |= (timer->SR & overcaptureFlag) != 0;
+                edges = GCR_TELEMETRY_INPUT_LEN - xDMA_GetCurrDataCounter(dmaMotors[i].dmaRef);
+
+                // Clear both the capture request and overcapture status before
+                // this channel is returned to output mode.
+                timer->SR = ~((TIM_SR_CC1IF | TIM_SR_CC1OF) << channelIndex);
+            }
+
+            dmaMotors[i].telemetryDmaCaptureActive = false;
+            dmaMotors[i].telemetryDmaFaultPending = false;
+            if (captureFault) {
+                // This counter normally records an aborted telemetry capture;
+                // a hardware-faulted PWM capture is the equivalent condition.
+                DEBUG_SET(DEBUG_DSHOT_TELEMETRY_COUNTS, 2, debug[2] + 1);
+                pwmDshotQuarantineCaptureDma(&dmaMotors[i]);
+            } else if (captureActive) {
+                dmaMotors[i].telemetryDmaFailureCount = 0;
+            }
+#else
 #ifdef USE_FULL_LL_DRIVER
             uint32_t edges = GCR_TELEMETRY_INPUT_LEN - xLL_EX_DMA_GetDataLength(dmaMotors[i].dmaRef);
 #else
@@ -300,10 +350,11 @@ FAST_CODE_NOINLINE bool pwmTelemetryDecode(void)
 #else
             TIM_DMACmd((TIM_TypeDef *)dmaMotors[i].timerHardware->tim, dmaMotors[i].timerDmaSource, DISABLE);
 #endif
+#endif
 
             uint16_t rawValue;
 
-            if (edges > MIN_GCR_EDGES) {
+            if (!captureFault && edges > MIN_GCR_EDGES) {
                 dshotTelemetryState.readCount++;
 
                 rawValue = decodeTelemetryPacket(dmaMotors[i].dmaBuffer, edges);

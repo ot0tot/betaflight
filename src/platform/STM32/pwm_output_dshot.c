@@ -137,6 +137,9 @@ FAST_CODE void pwmDshotSetDirectionOutput(
     xDMA_Init(dmaRef, pDmaInit);
     xDMA_ITConfig(dmaRef, DMA_IT_TC, ENABLE);
 #ifdef USE_DSHOT_TELEMETRY
+#if defined(STM32F4)
+    xDMA_ITConfig(dmaRef, DMA_IT_TE | DMA_IT_DME | DMA_IT_FE, useDshotTelemetry ? ENABLE : DISABLE);
+#endif
     // Only expose the output state after every protected DMA register has been
     // updated. A timed-out input stream remains pending and is retried later.
     motor->isInput = false;
@@ -176,6 +179,14 @@ static void pwmDshotSetDirectionInput(
 
     TIM_ICInit(timer, &motor->icInitStruct);
 
+#if defined(STM32F4)
+    // Remove a stale capture request and overcapture indication before the
+    // stream is armed. TIM_Channel_x values encode the zero-based channel in
+    // bits 3:2, while the CCxIF/CCxOF bits are contiguous in TIMx_SR.
+    const unsigned channelIndex = timerHardware->channel >> 2;
+    timer->SR = ~((TIM_SR_CC1IF | TIM_SR_CC1OF) << channelIndex);
+#endif
+
 #if !defined(STM32F4)
     xDMA_Init(dmaRef, pDmaInit);
 #endif
@@ -213,6 +224,29 @@ void pwmCompleteDshotMotorUpdate(void)
 
 FAST_CODE static void motor_DMA_IRQHandler(dmaChannelDescriptor_t *descriptor)
 {
+#if defined(STM32F4) && defined(USE_DSHOT_TELEMETRY)
+    if (useDshotTelemetry && DMA_GET_FLAG_STATUS(descriptor, DMA_IT_FEIF | DMA_IT_DMEIF | DMA_IT_TEIF)) {
+        motorDmaOutput_t * const motor = &dmaMotors[descriptor->userParam];
+
+        // A transfer error can clear EN without ever producing TCIF. Quiesce
+        // just this request source and defer the protected stream reconfigure
+        // to pwmTelemetryDecode(), outside the IRQ. Disabling the error IRQs
+        // prevents a persistent condition from becoming an interrupt storm.
+        TIM_DMACmd((TIM_TypeDef *)motor->timerHardware->tim, motor->timerDmaSource, DISABLE);
+        xDMA_ITConfig(motor->dmaRef, DMA_IT_TE | DMA_IT_DME | DMA_IT_FE, DISABLE);
+        xDMA_Cmd(motor->dmaRef, DISABLE);
+        DMA_CLEAR_FLAG(descriptor, DMA_IT_FEIF | DMA_IT_DMEIF | DMA_IT_TEIF | DMA_IT_HTIF | DMA_IT_TCIF);
+
+        motor->telemetryDmaCaptureActive = false;
+        motor->telemetryDmaFaultPending = true;
+        motor->isInput = true;
+        if (!inputStampUs) {
+            inputStampUs = micros();
+        }
+        return;
+    }
+#endif
+
     if (DMA_GET_FLAG_STATUS(descriptor, DMA_IT_TCIF)) {
         motorDmaOutput_t * const motor = &dmaMotors[descriptor->userParam];
 #ifdef USE_DSHOT_TELEMETRY
@@ -240,9 +274,23 @@ FAST_CODE static void motor_DMA_IRQHandler(dmaChannelDescriptor_t *descriptor)
 #ifdef USE_DSHOT_TELEMETRY
         if (useDshotTelemetry) {
             pwmDshotSetDirectionInput(motor);
+#if defined(STM32F4)
+            motor->telemetryDmaCaptureActive = false;
+            if (motor->telemetryDmaQuarantineFrames) {
+                motor->telemetryDmaQuarantineFrames--;
+            } else {
+                xDMA_SetCurrDataCounter(motor->dmaRef, GCR_TELEMETRY_INPUT_LEN);
+                // Publish the armed state before enabling requests so an
+                // immediate error IRQ cannot be overwritten on return.
+                motor->telemetryDmaCaptureActive = true;
+                xDMA_Cmd(motor->dmaRef, ENABLE);
+                TIM_DMACmd((TIM_TypeDef *)motor->timerHardware->tim, motor->timerDmaSource, ENABLE);
+            }
+#else
             xDMA_SetCurrDataCounter(motor->dmaRef, GCR_TELEMETRY_INPUT_LEN);
             xDMA_Cmd(motor->dmaRef, ENABLE);
             TIM_DMACmd((TIM_TypeDef *)motor->timerHardware->tim, motor->timerDmaSource, ENABLE);
+#endif
             dshotDMAHandlerCycleCounters.changeDirectionCompletedAt = getCycleCounter();
         }
 #endif
