@@ -126,7 +126,7 @@ const adcTagMap_t adcTagMap[] = {
 
 static ADC_TypeDef *activeAdc;
 static dmaResource_t *activeAdcDma;
-static uint16_t activeAdcDmaLength;
+static DMA_InitTypeDef activeAdcDmaInit;
 static volatile bool adcDmaRecoveryPending;
 
 #define ADC_DMA_DISABLE_TIMEOUT 1000
@@ -387,6 +387,8 @@ void adcInit(const adcConfig_t *config)
     DMA_InitStructure.DMA_Mode = DMA_Mode_Circular;
     DMA_InitStructure.DMA_Priority = DMA_Priority_High;
 
+    activeAdcDmaInit = DMA_InitStructure;
+
 #ifdef USE_DMA_SPEC
     xDMA_Init(dmaSpec->ref, &DMA_InitStructure);
     activeAdcDma = dmaSpec->ref;
@@ -396,7 +398,6 @@ void adcInit(const adcConfig_t *config)
 #endif
 
     activeAdc = adc.ADCx;
-    activeAdcDmaLength = configuredAdcChannels;
 
     const dmaIdentifier_e dmaIdentifier = dmaGetIdentifier(activeAdcDma);
     dmaSetHandler(dmaIdentifier, adcDmaIrqHandler, NVIC_PRIO_ADC, RESOURCE_INDEX(device));
@@ -430,14 +431,17 @@ void adcGetChannelValues(void)
 
     dmaChannelDescriptor_t *descriptor = dmaGetDescriptorByIdentifier(dmaGetIdentifier(activeAdcDma));
     DMA_CLEAR_FLAG(descriptor, DMA_IT_FEIF | DMA_IT_DMEIF | DMA_IT_TEIF | DMA_IT_HTIF | DMA_IT_TCIF);
+    ADC_Cmd(activeAdc, DISABLE);
+    xDMA_DeInit(activeAdcDma);
+    xDMA_Init(activeAdcDma, &activeAdcDmaInit);
     ADC_ClearFlag(activeAdc, ADC_FLAG_OVR);
-    xDMA_SetCurrDataCounter(activeAdcDma, activeAdcDmaLength);
 
     adcDmaRecoveryPending = false;
     xDMA_ITConfig(activeAdcDma, DMA_IT_TE, ENABLE);
     xDMA_Cmd(activeAdcDma, ENABLE);
     ADC_DMARequestAfterLastTransferCmd(activeAdc, ENABLE);
     ADC_DMACmd(activeAdc, ENABLE);
+    ADC_Cmd(activeAdc, ENABLE);
     ADC_ITConfig(activeAdc, ADC_IT_OVR, ENABLE);
     ADC_SoftwareStartConv(activeAdc);
 }

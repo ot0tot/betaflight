@@ -106,15 +106,16 @@ FAST_CODE void pwmDshotSetDirectionOutput(
 #if defined(STM32F4)
     // A failed bidirectional capture is recovered from this normal frame path,
     // avoiding an interrupt storm when transfer errors recur every frame.
-    if (!pwmDshotDisableDma(dmaRef)) {
+    dmaChannelDescriptor_t *descriptor = dmaGetDescriptorByIdentifier(dmaGetIdentifier(dmaRef));
+    const bool dmaDisabled = pwmDshotDisableDma(dmaRef);
+    DMA_CLEAR_FLAG(descriptor, DMA_IT_FEIF | DMA_IT_DMEIF | DMA_IT_TEIF | DMA_IT_HTIF | DMA_IT_TCIF);
+    if (!dmaDisabled) {
 #ifdef USE_DSHOT_TELEMETRY
         // isInput also acts as the not-ready state consumed by telemetry decode.
         motor->isInput = true;
 #endif
         return;
     }
-    dmaChannelDescriptor_t *descriptor = dmaGetDescriptorByIdentifier(dmaGetIdentifier(dmaRef));
-    DMA_CLEAR_FLAG(descriptor, DMA_IT_FEIF | DMA_IT_DMEIF | DMA_IT_TEIF | DMA_IT_HTIF | DMA_IT_TCIF);
 #endif
     xDMA_DeInit(dmaRef);
 

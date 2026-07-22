@@ -110,11 +110,7 @@ void motorWriteAll(float *values)
             // New data will be received once the send of motor data, triggered above, completes
 #if defined(USE_DSHOT) && defined(USE_DSHOT_TELEMETRY)
             if (motorDevice.vTable->decodeTelemetry) {
-                if (!motorDevice.vTable->decodeTelemetry()) {
-                    // The previous bidirectional capture is still active or
-                    // recovering. Do not start a frame with stale DMA state.
-                    return;
-                }
+                motorDevice.vTable->decodeTelemetry();
             }
 #endif
 

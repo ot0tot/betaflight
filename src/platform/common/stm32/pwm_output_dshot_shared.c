@@ -117,6 +117,14 @@ FAST_CODE void pwmWriteDshotInt(uint8_t index, uint16_t value)
         return;
     }
 
+#if defined(USE_DSHOT_TELEMETRY) && defined(STM32F4)
+    if (useDshotTelemetry && motor->isInput) {
+        // Recovery is per stream. Skip this motor until its DMA can be safely
+        // returned to output without preventing healthy motors from updating.
+        return;
+    }
+#endif
+
     /*If there is a command ready to go overwrite the value and send that instead*/
     if (dshotCommandIsProcessing()) {
         value = dshotCommandGetCurrent(index);
@@ -319,11 +327,6 @@ FAST_CODE_NOINLINE bool pwmTelemetryDecode(void)
             }
         }
         pwmDshotSetDirectionOutput(&dmaMotors[i]);
-        if (dmaMotors[i].isInput) {
-            // The DMA stream is still shutting down. Do not start another frame
-            // with its input configuration; retry from the scheduler instead.
-            return false;
-        }
     }
 
     dshotTelemetryState.rawValueState = DSHOT_RAW_VALUE_STATE_NOT_PROCESSED;
