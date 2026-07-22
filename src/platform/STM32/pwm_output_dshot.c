@@ -51,6 +51,29 @@
 
 #ifdef USE_DSHOT_TELEMETRY
 
+#if defined(STM32F4)
+
+// RM0090 requires EN to read zero before reprogramming a DMA stream.  The F4
+// StdPeriph DMA_DeInit() clears EN but does not wait for the disable to finish.
+// Usually the stream is already idle; the bounded retry only matters when a
+// capture request is still being retired by the DMA controller.
+#define DSHOT_DMA_DISABLE_MAX_POLLS 1000
+
+FAST_CODE static bool pwmDshotDisableDmaForHandoff(dmaResource_t *dmaRef)
+{
+    xDMA_Cmd(dmaRef, DISABLE);
+
+    for (unsigned poll = 0; poll < DSHOT_DMA_DISABLE_MAX_POLLS; poll++) {
+        if (!IS_DMA_ENABLED(dmaRef)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+#endif
+
 void dshotEnableChannels(unsigned motorCount)
 {
     for (unsigned i = 0; i < motorCount; i++) {
@@ -87,11 +110,15 @@ FAST_CODE void pwmDshotSetDirectionOutput(
     }
 #endif
 
+#if defined(STM32F4) && defined(USE_DSHOT_TELEMETRY)
+    if (!pwmDshotDisableDmaForHandoff(dmaRef)) {
+        motor->dmaHandoffPending = true;
+        return;
+    }
+#endif
+
     xDMA_DeInit(dmaRef);
 
-#ifdef USE_DSHOT_TELEMETRY
-    motor->isInput = false;
-#endif
     timerOCPreloadConfig(timer, timerHardware->channel, TIM_OCPreload_Disable);
     timerOCInit(timer, timerHardware->channel, pOcInit);
     timerOCPreloadConfig(timer, timerHardware->channel, TIM_OCPreload_Enable);
@@ -109,11 +136,18 @@ FAST_CODE void pwmDshotSetDirectionOutput(
 
     xDMA_Init(dmaRef, pDmaInit);
     xDMA_ITConfig(dmaRef, DMA_IT_TC, ENABLE);
+
+#ifdef USE_DSHOT_TELEMETRY
+    motor->isInput = false;
+#if defined(STM32F4)
+    motor->dmaHandoffPending = false;
+#endif
+#endif
 }
 
 #ifdef USE_DSHOT_TELEMETRY
 FAST_CODE
-static void pwmDshotSetDirectionInput(
+static bool pwmDshotSetDirectionInput(
     motorDmaOutput_t * const motor
 )
 {
@@ -124,9 +158,15 @@ static void pwmDshotSetDirectionInput(
 
     dmaResource_t *dmaRef = motor->dmaRef;
 
+#if defined(STM32F4)
+    if (!pwmDshotDisableDmaForHandoff(dmaRef)) {
+        motor->dmaHandoffPending = true;
+        return false;
+    }
+#endif
+
     xDMA_DeInit(dmaRef);
 
-    motor->isInput = true;
     if (!inputStampUs) {
         inputStampUs = micros();
     }
@@ -140,6 +180,12 @@ static void pwmDshotSetDirectionInput(
 #endif
 
     xDMA_Init(dmaRef, pDmaInit);
+
+    motor->isInput = true;
+#if defined(STM32F4)
+    motor->dmaHandoffPending = false;
+#endif
+    return true;
 }
 #endif
 
@@ -186,17 +232,18 @@ FAST_CODE static void motor_DMA_IRQHandler(dmaChannelDescriptor_t *descriptor)
         } else
 #endif
         {
-            xDMA_Cmd(motor->dmaRef, DISABLE);
             TIM_DMACmd((TIM_TypeDef *)motor->timerHardware->tim, motor->timerDmaSource, DISABLE);
+            xDMA_Cmd(motor->dmaRef, DISABLE);
         }
 
 #ifdef USE_DSHOT_TELEMETRY
         if (useDshotTelemetry) {
-            pwmDshotSetDirectionInput(motor);
-            xDMA_SetCurrDataCounter(motor->dmaRef, GCR_TELEMETRY_INPUT_LEN);
-            xDMA_Cmd(motor->dmaRef, ENABLE);
-            TIM_DMACmd((TIM_TypeDef *)motor->timerHardware->tim, motor->timerDmaSource, ENABLE);
-            dshotDMAHandlerCycleCounters.changeDirectionCompletedAt = getCycleCounter();
+            if (pwmDshotSetDirectionInput(motor)) {
+                xDMA_SetCurrDataCounter(motor->dmaRef, GCR_TELEMETRY_INPUT_LEN);
+                xDMA_Cmd(motor->dmaRef, ENABLE);
+                TIM_DMACmd((TIM_TypeDef *)motor->timerHardware->tim, motor->timerDmaSource, ENABLE);
+                dshotDMAHandlerCycleCounters.changeDirectionCompletedAt = getCycleCounter();
+            }
         }
 #endif
         DMA_CLEAR_FLAG(descriptor, DMA_IT_TCIF);

@@ -133,6 +133,9 @@ typedef struct motorDmaOutput_s {
 
 #ifdef USE_DSHOT_TELEMETRY
     volatile bool isInput;
+#if defined(STM32F4)
+    volatile bool dmaHandoffPending;
+#endif
     timeDelta_t dshotTelemetryDeadtimeUs;
     uint8_t dmaInputLen;
 

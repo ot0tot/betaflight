@@ -117,6 +117,13 @@ FAST_CODE void pwmWriteDshotInt(uint8_t index, uint16_t value)
         return;
     }
 
+#if defined(USE_DSHOT_TELEMETRY) && defined(STM32F4)
+    // Do not start another frame until a delayed DMA direction change has completed.
+    if (motor->dmaHandoffPending) {
+        return;
+    }
+#endif
+
     /*If there is a command ready to go overwrite the value and send that instead*/
     if (dshotCommandIsProcessing()) {
         value = dshotCommandGetCurrent(index);
@@ -276,7 +283,11 @@ FAST_CODE_NOINLINE bool pwmTelemetryDecode(void)
         if (usSinceInput >= 0 && usSinceInput < dmaMotors[i].dshotTelemetryDeadtimeUs) {
             return false;
         }
-        if (dmaMotors[i].isInput) {
+        if (dmaMotors[i].isInput
+#if defined(STM32F4)
+            && !dmaMotors[i].dmaHandoffPending
+#endif
+        ) {
 #ifdef USE_FULL_LL_DRIVER
             uint32_t edges = GCR_TELEMETRY_INPUT_LEN - xLL_EX_DMA_GetDataLength(dmaMotors[i].dmaRef);
 #else
