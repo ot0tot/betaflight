@@ -167,6 +167,9 @@ bool dshotPwmDevInit(motorDevice_t *device, const motorDevConfig_t *motorConfig)
     dshotMotorCount = device->count;
 #ifdef USE_DSHOT_TELEMETRY
     useDshotTelemetry = motorConfig->useDshotTelemetry;
+#if defined(STM32F405xx)
+    dshotTelemetryCaptureMotorIndex = 0;
+#endif
 #endif
 
     switch (motorConfig->motorProtocol) {

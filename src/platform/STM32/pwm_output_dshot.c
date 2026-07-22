@@ -158,6 +158,9 @@ FAST_CODE void pwmDshotSetDirectionOutput(
 #if defined(STM32F4)
     motor->dmaHandoffPending = false;
 #endif
+#if defined(STM32F405xx)
+    motor->telemetryDmaCaptureActive = false;
+#endif
 #endif
 }
 
@@ -255,10 +258,19 @@ FAST_CODE static void motor_DMA_IRQHandler(dmaChannelDescriptor_t *descriptor)
 #ifdef USE_DSHOT_TELEMETRY
         if (useDshotTelemetry) {
             if (pwmDshotSetDirectionInput(motor)) {
+#if defined(STM32F405xx)
+                // All channels become inputs so every ESC can release the line,
+                // but only one DMA2 stream captures telemetry in each frame.
+                motor->telemetryDmaCaptureActive = motor->index == dshotTelemetryCaptureMotorIndex;
+                if (motor->telemetryDmaCaptureActive) {
+#endif
                 xDMA_SetCurrDataCounter(motor->dmaRef, GCR_TELEMETRY_INPUT_LEN);
                 xDMA_Cmd(motor->dmaRef, ENABLE);
                 TIM_DMACmd((TIM_TypeDef *)motor->timerHardware->tim, motor->timerDmaSource, ENABLE);
                 dshotDMAHandlerCycleCounters.changeDirectionCompletedAt = getCycleCounter();
+#if defined(STM32F405xx)
+                }
+#endif
             }
         }
 #endif

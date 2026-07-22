@@ -64,6 +64,10 @@ motorDmaOutput_t dmaMotors[MAX_SUPPORTED_MOTORS];
 FAST_DATA_ZERO_INIT uint32_t inputStampUs;
 
 FAST_DATA_ZERO_INIT dshotTelemetryCycleCounters_t dshotDMAHandlerCycleCounters;
+
+#if defined(STM32F405xx)
+FAST_DATA_ZERO_INIT volatile uint8_t dshotTelemetryCaptureMotorIndex;
+#endif
 #endif
 
 motorDmaOutput_t *getMotorDmaOutput(unsigned index)
@@ -287,6 +291,9 @@ FAST_CODE_NOINLINE bool pwmTelemetryDecode(void)
 #if defined(STM32F4)
             && !dmaMotors[i].dmaHandoffPending
 #endif
+#if defined(STM32F405xx)
+            && dmaMotors[i].telemetryDmaCaptureActive
+#endif
         ) {
 #ifdef USE_FULL_LL_DRIVER
             uint32_t edges = GCR_TELEMETRY_INPUT_LEN - xLL_EX_DMA_GetDataLength(dmaMotors[i].dmaRef);
@@ -334,6 +341,11 @@ FAST_CODE_NOINLINE bool pwmTelemetryDecode(void)
 
     dshotTelemetryState.rawValueState = DSHOT_RAW_VALUE_STATE_NOT_PROCESSED;
     inputStampUs = 0;
+#if defined(STM32F405xx)
+    if (++dshotTelemetryCaptureMotorIndex >= dshotMotorCount) {
+        dshotTelemetryCaptureMotorIndex = 0;
+    }
+#endif
     dshotEnableChannels(dshotMotorCount);
     return true;
 #endif // USE_DSHOT_TELEMETRY
