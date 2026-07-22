@@ -127,44 +127,41 @@ const adcTagMap_t adcTagMap[] = {
 static ADC_TypeDef *activeAdc;
 static dmaResource_t *activeAdcDma;
 static uint16_t activeAdcDmaLength;
+static volatile bool adcDmaRecoveryPending;
 
-static void adcDmaRecover(dmaChannelDescriptor_t *descriptor)
+#define ADC_DMA_DISABLE_TIMEOUT 1000
+
+static void adcScheduleDmaRecovery(dmaChannelDescriptor_t *descriptor)
 {
     if (!activeAdc || !activeAdcDma) {
         return;
     }
 
-    // An F4 ADC overrun stops further DMA requests. Reset both sides of the
-    // handshake before re-arming the circular stream.
-    ADC_ClearFlag(activeAdc, ADC_FLAG_OVR);
-    xDMA_Cmd(activeAdcDma, DISABLE);
-    while (((DMA_Stream_TypeDef *)activeAdcDma)->CR & DMA_SxCR_EN) {
-        // NDTR is write-protected until EN reads zero.
-    }
+    adcDmaRecoveryPending = true;
+
+    // Quiesce the request source and interrupts, but leave the full restart to
+    // adcGetChannelValues(). A faulted DMA stream must never be polled from an ISR.
+    ADC_ITConfig(activeAdc, ADC_IT_OVR, DISABLE);
+    xDMA_ITConfig(activeAdcDma, DMA_IT_TE, DISABLE);
     ADC_DMACmd(activeAdc, DISABLE);
     ADC_DMARequestAfterLastTransferCmd(activeAdc, DISABLE);
+    xDMA_Cmd(activeAdcDma, DISABLE);
 
-    DMA_CLEAR_FLAG(descriptor, DMA_IT_FEIF | DMA_IT_DMEIF | DMA_IT_TEIF | DMA_IT_HTIF | DMA_IT_TCIF);
-    xDMA_SetCurrDataCounter(activeAdcDma, activeAdcDmaLength);
-
-    // Clear a possible overrun from a conversion completed during recovery.
     ADC_ClearFlag(activeAdc, ADC_FLAG_OVR);
-    ADC_DMARequestAfterLastTransferCmd(activeAdc, ENABLE);
-    ADC_DMACmd(activeAdc, ENABLE);
-    xDMA_Cmd(activeAdcDma, ENABLE);
+    DMA_CLEAR_FLAG(descriptor, DMA_IT_FEIF | DMA_IT_DMEIF | DMA_IT_TEIF | DMA_IT_HTIF | DMA_IT_TCIF);
 }
 
 static void adcDmaIrqHandler(dmaChannelDescriptor_t *descriptor)
 {
     if (DMA_GET_FLAG_STATUS(descriptor, DMA_IT_TEIF)) {
-        adcDmaRecover(descriptor);
+        adcScheduleDmaRecovery(descriptor);
     }
 }
 
 FAST_IRQ_HANDLER void ADC_IRQHandler(void)
 {
     if (activeAdc && ADC_GetITStatus(activeAdc, ADC_IT_OVR) != RESET) {
-        adcDmaRecover(dmaGetDescriptorByIdentifier(dmaGetIdentifier(activeAdcDma)));
+        adcScheduleDmaRecovery(dmaGetDescriptorByIdentifier(dmaGetIdentifier(activeAdcDma)));
     }
 }
 
@@ -419,6 +416,28 @@ void adcInit(const adcConfig_t *config)
 
 void adcGetChannelValues(void)
 {
-    // Nothing to do
+    if (!adcDmaRecoveryPending) {
+        return;
+    }
+
+    DMA_Stream_TypeDef *stream = (DMA_Stream_TypeDef *)activeAdcDma;
+    for (unsigned timeout = ADC_DMA_DISABLE_TIMEOUT; (stream->CR & DMA_SxCR_EN) && timeout; timeout--) {
+        // The request source is disabled, so EN should clear after any in-flight transfer.
+    }
+    if (stream->CR & DMA_SxCR_EN) {
+        return;
+    }
+
+    dmaChannelDescriptor_t *descriptor = dmaGetDescriptorByIdentifier(dmaGetIdentifier(activeAdcDma));
+    DMA_CLEAR_FLAG(descriptor, DMA_IT_FEIF | DMA_IT_DMEIF | DMA_IT_TEIF | DMA_IT_HTIF | DMA_IT_TCIF);
+    ADC_ClearFlag(activeAdc, ADC_FLAG_OVR);
+    xDMA_SetCurrDataCounter(activeAdcDma, activeAdcDmaLength);
+
+    adcDmaRecoveryPending = false;
+    xDMA_ITConfig(activeAdcDma, DMA_IT_TE, ENABLE);
+    xDMA_Cmd(activeAdcDma, ENABLE);
+    ADC_DMARequestAfterLastTransferCmd(activeAdc, ENABLE);
+    ADC_DMACmd(activeAdc, ENABLE);
+    ADC_ITConfig(activeAdc, ADC_IT_OVR, ENABLE);
 }
 #endif

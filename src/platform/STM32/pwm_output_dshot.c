@@ -49,6 +49,20 @@
 #include "drivers/dshot_command.h"
 #include "pwm_output_dshot_shared.h"
 
+#if defined(STM32F4)
+#define DSHOT_DMA_DISABLE_TIMEOUT 1000
+
+FAST_CODE static void pwmDshotDisableDma(dmaResource_t *dmaRef)
+{
+    xDMA_Cmd(dmaRef, DISABLE);
+    for (unsigned timeout = DSHOT_DMA_DISABLE_TIMEOUT;
+        (((DMA_Stream_TypeDef *)dmaRef)->CR & DMA_SxCR_EN) && timeout;
+        timeout--) {
+        // Configuration registers are write-protected until EN reads zero.
+    }
+}
+#endif
+
 #ifdef USE_DSHOT_TELEMETRY
 
 void dshotEnableChannels(unsigned motorCount)
@@ -87,6 +101,13 @@ FAST_CODE void pwmDshotSetDirectionOutput(
     }
 #endif
 
+#if defined(STM32F4)
+    // A failed bidirectional capture is recovered from this normal frame path,
+    // avoiding an interrupt storm when transfer errors recur every frame.
+    pwmDshotDisableDma(dmaRef);
+    dmaChannelDescriptor_t *descriptor = dmaGetDescriptorByIdentifier(dmaGetIdentifier(dmaRef));
+    DMA_CLEAR_FLAG(descriptor, DMA_IT_FEIF | DMA_IT_DMEIF | DMA_IT_TEIF | DMA_IT_HTIF | DMA_IT_TCIF);
+#endif
     xDMA_DeInit(dmaRef);
 
 #ifdef USE_DSHOT_TELEMETRY
@@ -108,11 +129,7 @@ FAST_CODE void pwmDshotSetDirectionOutput(
     }
 
     xDMA_Init(dmaRef, pDmaInit);
-#ifdef USE_DSHOT_TELEMETRY
-    xDMA_ITConfig(dmaRef, DMA_IT_TC | DMA_IT_TE, ENABLE);
-#else
     xDMA_ITConfig(dmaRef, DMA_IT_TC, ENABLE);
-#endif
 }
 
 #ifdef USE_DSHOT_TELEMETRY
@@ -185,30 +202,6 @@ void pwmCompleteDshotMotorUpdate(void)
 
 FAST_CODE static void motor_DMA_IRQHandler(dmaChannelDescriptor_t *descriptor)
 {
-#if defined(STM32F4)
-    if (DMA_GET_FLAG_STATUS(descriptor, DMA_IT_TEIF)) {
-        motorDmaOutput_t * const motor = &dmaMotors[descriptor->userParam];
-
-#ifdef USE_DSHOT_DMAR
-        if (useBurstDshot) {
-            xDMA_Cmd(motor->timerHardware->dmaTimUPRef, DISABLE);
-            TIM_DMACmd((TIM_TypeDef *)motor->timerHardware->tim, TIM_DMA_Update, DISABLE);
-        } else
-#endif
-        {
-            xDMA_Cmd(motor->dmaRef, DISABLE);
-            TIM_DMACmd((TIM_TypeDef *)motor->timerHardware->tim, motor->timerDmaSource, DISABLE);
-        }
-
-        DMA_Stream_TypeDef *stream = (DMA_Stream_TypeDef *)motor->dmaRef;
-        while (stream->CR & DMA_SxCR_EN) {
-            // Configuration registers and NDTR are write-protected until EN reads zero.
-        }
-        DMA_CLEAR_FLAG(descriptor, DMA_IT_FEIF | DMA_IT_DMEIF | DMA_IT_TEIF | DMA_IT_HTIF | DMA_IT_TCIF);
-        return;
-    }
-#endif
-
     if (DMA_GET_FLAG_STATUS(descriptor, DMA_IT_TCIF)) {
         motorDmaOutput_t * const motor = &dmaMotors[descriptor->userParam];
 #ifdef USE_DSHOT_TELEMETRY
@@ -226,10 +219,7 @@ FAST_CODE static void motor_DMA_IRQHandler(dmaChannelDescriptor_t *descriptor)
         }
 
 #if defined(STM32F4)
-        DMA_Stream_TypeDef *stream = (DMA_Stream_TypeDef *)motor->dmaRef;
-        while (stream->CR & DMA_SxCR_EN) {
-            // Configuration registers are write-protected until EN reads zero.
-        }
+        pwmDshotDisableDma(motor->dmaRef);
         DMA_CLEAR_FLAG(descriptor, DMA_IT_FEIF | DMA_IT_DMEIF | DMA_IT_TEIF | DMA_IT_HTIF | DMA_IT_TCIF);
 #endif
 
