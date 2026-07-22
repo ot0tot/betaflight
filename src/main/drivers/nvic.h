@@ -28,6 +28,7 @@
 #define NVIC_PRIO_BARO_EXTI                NVIC_BUILD_PRIORITY(0x0f, 0x0f)
 #define NVIC_PRIO_SONAR_EXTI               NVIC_BUILD_PRIORITY(2, 0)  // maybe increase slightly
 #define NVIC_PRIO_DSHOT_DMA                NVIC_BUILD_PRIORITY(2, 1)
+#define NVIC_PRIO_ADC                      NVIC_BUILD_PRIORITY(2, 2)
 #define NVIC_PRIO_TRANSPONDER_DMA          NVIC_BUILD_PRIORITY(3, 0)
 
 // RX_SPI must be lower priority than SPI DMA so EXTI ISRs don't interfere with SPI transfers and transfer complete callbacks

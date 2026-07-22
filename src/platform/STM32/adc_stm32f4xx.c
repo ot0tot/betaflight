@@ -32,6 +32,7 @@
 #include "platform/dma.h"
 #include "drivers/io.h"
 #include "drivers/io_impl.h"
+#include "drivers/nvic.h"
 #include "platform/rcc.h"
 #include "drivers/dma.h"
 #include "drivers/sensor.h"
@@ -122,6 +123,50 @@ const adcTagMap_t adcTagMap[] = {
     { DEFIO_TAG_E__PA7, ADC_DEVICES_12,  ADC_Channel_7  },
 #endif
 };
+
+static ADC_TypeDef *activeAdc;
+static dmaResource_t *activeAdcDma;
+static uint16_t activeAdcDmaLength;
+
+static void adcDmaRecover(dmaChannelDescriptor_t *descriptor)
+{
+    if (!activeAdc || !activeAdcDma) {
+        return;
+    }
+
+    // An F4 ADC overrun stops further DMA requests. Reset both sides of the
+    // handshake before re-arming the circular stream.
+    ADC_ClearFlag(activeAdc, ADC_FLAG_OVR);
+    xDMA_Cmd(activeAdcDma, DISABLE);
+    while (((DMA_Stream_TypeDef *)activeAdcDma)->CR & DMA_SxCR_EN) {
+        // NDTR is write-protected until EN reads zero.
+    }
+    ADC_DMACmd(activeAdc, DISABLE);
+    ADC_DMARequestAfterLastTransferCmd(activeAdc, DISABLE);
+
+    DMA_CLEAR_FLAG(descriptor, DMA_IT_FEIF | DMA_IT_DMEIF | DMA_IT_TEIF | DMA_IT_HTIF | DMA_IT_TCIF);
+    xDMA_SetCurrDataCounter(activeAdcDma, activeAdcDmaLength);
+
+    // Clear a possible overrun from a conversion completed during recovery.
+    ADC_ClearFlag(activeAdc, ADC_FLAG_OVR);
+    ADC_DMARequestAfterLastTransferCmd(activeAdc, ENABLE);
+    ADC_DMACmd(activeAdc, ENABLE);
+    xDMA_Cmd(activeAdcDma, ENABLE);
+}
+
+static void adcDmaIrqHandler(dmaChannelDescriptor_t *descriptor)
+{
+    if (DMA_GET_FLAG_STATUS(descriptor, DMA_IT_TEIF)) {
+        adcDmaRecover(descriptor);
+    }
+}
+
+FAST_IRQ_HANDLER void ADC_IRQHandler(void)
+{
+    if (activeAdc && ADC_GetITStatus(activeAdc, ADC_IT_OVR) != RESET) {
+        adcDmaRecover(dmaGetDescriptorByIdentifier(dmaGetIdentifier(activeAdcDma)));
+    }
+}
 
 #define VREFINT_CAL_ADDR  0x1FFF7A2A
 #define TS_CAL1_ADDR      0x1FFF7A2C
@@ -347,11 +392,27 @@ void adcInit(const adcConfig_t *config)
 
 #ifdef USE_DMA_SPEC
     xDMA_Init(dmaSpec->ref, &DMA_InitStructure);
-    xDMA_Cmd(dmaSpec->ref, ENABLE);
+    activeAdcDma = dmaSpec->ref;
 #else
     xDMA_Init(adc.dmaResource, &DMA_InitStructure);
-    xDMA_Cmd(adc.dmaResource, ENABLE);
+    activeAdcDma = adc.dmaResource;
 #endif
+
+    activeAdc = adc.ADCx;
+    activeAdcDmaLength = configuredAdcChannels;
+
+    const dmaIdentifier_e dmaIdentifier = dmaGetIdentifier(activeAdcDma);
+    dmaSetHandler(dmaIdentifier, adcDmaIrqHandler, NVIC_PRIO_ADC, RESOURCE_INDEX(device));
+    xDMA_ITConfig(activeAdcDma, DMA_IT_TE, ENABLE);
+    xDMA_Cmd(activeAdcDma, ENABLE);
+
+    NVIC_InitTypeDef nvic;
+    nvic.NVIC_IRQChannel = ADC_IRQn;
+    nvic.NVIC_IRQChannelPreemptionPriority = NVIC_PRIORITY_BASE(NVIC_PRIO_ADC);
+    nvic.NVIC_IRQChannelSubPriority = NVIC_PRIORITY_SUB(NVIC_PRIO_ADC);
+    nvic.NVIC_IRQChannelCmd = ENABLE;
+    NVIC_Init(&nvic);
+    ADC_ITConfig(activeAdc, ADC_IT_OVR, ENABLE);
 
     ADC_SoftwareStartConv(adc.ADCx);
 }
