@@ -26,7 +26,24 @@
 
 #ifdef USE_ADC
 
+#define ADC_DMA_ON_DEMAND_BOARD_ODDITYRCF405 1
+#define ADC_DMA_ON_DEMAND_BOARD_SELECT_(name) ADC_DMA_ON_DEMAND_BOARD_ ## name
+#define ADC_DMA_ON_DEMAND_BOARD_SELECT(name) ADC_DMA_ON_DEMAND_BOARD_SELECT_(name)
+
+#if defined(BOARD_NAME) && ADC_DMA_ON_DEMAND_BOARD_SELECT(BOARD_NAME)
+#define ADC_DMA_ON_DEMAND
+#define ADC_DMA_PRIORITY DMA_Priority_VeryHigh
+#endif
+
+#undef ADC_DMA_ON_DEMAND_BOARD_SELECT
+#undef ADC_DMA_ON_DEMAND_BOARD_SELECT_
+#undef ADC_DMA_ON_DEMAND_BOARD_ODDITYRCF405
+
 #include "build/debug.h"
+
+#ifdef ADC_DMA_ON_DEMAND
+#include "common/time.h"
+#endif
 
 #include "drivers/dma_reqmap.h"
 #include "platform/dma.h"
@@ -36,6 +53,9 @@
 #include "drivers/dma.h"
 #include "drivers/sensor.h"
 #include "drivers/adc.h"
+#ifdef ADC_DMA_ON_DEMAND
+#include "drivers/time.h"
+#endif
 #include "platform/adc_impl.h"
 
 #include "pg/adc.h"
@@ -43,6 +63,26 @@
 // These are missing from STM32F4xx_StdPeriph_Driver/inc/stm32f4xx_adc.h
 #ifdef STM32F446xx
 #define ADC_Channel_TempSensor ADC_Channel_18
+#endif
+
+#ifndef ADC_DMA_PRIORITY
+#define ADC_DMA_PRIORITY DMA_Priority_High
+#endif
+
+#ifdef ADC_DMA_ON_DEMAND
+#define ADC_DMA_ON_DEMAND_TIMEOUT_US 1000
+
+static ADC_TypeDef *adcOnDemandAdc;
+static dmaResource_t *adcOnDemandDma;
+static dmaChannelDescriptor_t *adcOnDemandDmaDescriptor;
+static DMA_InitTypeDef adcOnDemandDmaInit;
+static uint16_t adcOnDemandDmaCounter;
+static timeUs_t adcOnDemandStartedAt;
+static bool adcOnDemandConversionPending;
+#endif
+
+#ifdef USE_ADC_INTERNAL
+static bool adcInternalConversionInProgress;
 #endif
 
 const adcDevice_t adcHardware[] = {
@@ -133,7 +173,11 @@ static void adcInitDevice(ADC_TypeDef *adcdev, int channelCount)
 
     ADC_StructInit(&ADC_InitStructure);
 
+#ifdef ADC_DMA_ON_DEMAND
+    ADC_InitStructure.ADC_ContinuousConvMode       = DISABLE;
+#else
     ADC_InitStructure.ADC_ContinuousConvMode       = ENABLE;
+#endif
     ADC_InitStructure.ADC_Resolution               = ADC_Resolution_12b;
     ADC_InitStructure.ADC_ExternalTrigConv         = ADC_ExternalTrigConv_T1_CC1;
     ADC_InitStructure.ADC_ExternalTrigConvEdge     = ADC_ExternalTrigConvEdge_None;
@@ -148,7 +192,56 @@ static void adcInitDevice(ADC_TypeDef *adcdev, int channelCount)
     ADC_InitStructure.ADC_ScanConvMode             = channelCount > 1 ? ENABLE : DISABLE; // 1=scan more that one channel in group
 #endif
     ADC_Init(adcdev, &ADC_InitStructure);
+
+#ifdef ADC_DMA_ON_DEMAND
+    if (channelCount > 1) {
+        ADC_DiscModeChannelCountConfig(adcdev, 1);
+        ADC_DiscModeCmd(adcdev, ENABLE);
+    }
+#endif
 }
+
+#ifdef ADC_DMA_ON_DEMAND
+static void adcStartOnDemandConversion(void)
+{
+    adcOnDemandDmaCounter = xDMA_GetCurrDataCounter(adcOnDemandDma);
+    adcOnDemandStartedAt = micros();
+    adcOnDemandConversionPending = true;
+    ADC_SoftwareStartConv(adcOnDemandAdc);
+}
+
+static void adcRecoverOnDemandDma(void)
+{
+#ifdef USE_ADC_INTERNAL
+    adcInternalConversionInProgress = false;
+#endif
+
+    ADC_Cmd(adcOnDemandAdc, DISABLE);
+    ADC_DMACmd(adcOnDemandAdc, DISABLE);
+    ADC_DMARequestAfterLastTransferCmd(adcOnDemandAdc, DISABLE);
+
+    xDMA_Cmd(adcOnDemandDma, DISABLE);
+    for (unsigned attempts = 0; attempts < 100 && IS_DMA_ENABLED(adcOnDemandDma); attempts++) {
+        __NOP();
+    }
+
+    if (IS_DMA_ENABLED(adcOnDemandDma)) {
+        return;
+    }
+
+    xDMA_DeInit(adcOnDemandDma);
+    xDMA_Init(adcOnDemandDma, &adcOnDemandDmaInit);
+    DMA_CLEAR_FLAG(adcOnDemandDmaDescriptor, DMA_IT_FEIF | DMA_IT_DMEIF | DMA_IT_TEIF | DMA_IT_HTIF | DMA_IT_TCIF);
+
+    ADC_ClearFlag(adcOnDemandAdc, ADC_FLAG_EOC | ADC_FLAG_STRT | ADC_FLAG_OVR);
+
+    xDMA_Cmd(adcOnDemandDma, ENABLE);
+    ADC_DMARequestAfterLastTransferCmd(adcOnDemandAdc, ENABLE);
+    ADC_DMACmd(adcOnDemandAdc, ENABLE);
+    ADC_Cmd(adcOnDemandAdc, ENABLE);
+    adcStartOnDemandConversion();
+}
+#endif
 
 #ifdef USE_ADC_INTERNAL
 static void adcInitInternalInjected(const adcConfig_t *config)
@@ -173,8 +266,6 @@ static void adcInitInternalInjected(const adcConfig_t *config)
 // 240MHz : fAPB2 = 120MHz, fADC = 15.0MHz, tcycle = 0.067usk 10us = 150cycle < 480cycle
 //
 // 480cycles@15.0MHz = 32us
-
-static bool adcInternalConversionInProgress = false;
 
 bool adcInternalIsBusy(void)
 {
@@ -312,17 +403,17 @@ void adcInit(const adcConfig_t *config)
     }
 
     dmaEnable(dmaGetIdentifier(dmaSpec->ref));
-
-    xDMA_DeInit(dmaSpec->ref);
+    dmaResource_t *dmaResource = dmaSpec->ref;
 #else
     if (!dmaAllocate(dmaGetIdentifier(adc.dmaResource), OWNER_ADC, 0)) {
         return;
     }
 
     dmaEnable(dmaGetIdentifier(adc.dmaResource));
-
-    xDMA_DeInit(adc.dmaResource);
+    dmaResource_t *dmaResource = adc.dmaResource;
 #endif
+
+    xDMA_DeInit(dmaResource);
 
     DMA_InitTypeDef DMA_InitStructure;
 
@@ -343,21 +434,49 @@ void adcInit(const adcConfig_t *config)
     DMA_InitStructure.DMA_PeripheralDataSize = DMA_PeripheralDataSize_HalfWord;
     DMA_InitStructure.DMA_MemoryDataSize = DMA_MemoryDataSize_HalfWord;
     DMA_InitStructure.DMA_Mode = DMA_Mode_Circular;
-    DMA_InitStructure.DMA_Priority = DMA_Priority_High;
+    DMA_InitStructure.DMA_Priority = ADC_DMA_PRIORITY;
 
-#ifdef USE_DMA_SPEC
-    xDMA_Init(dmaSpec->ref, &DMA_InitStructure);
-    xDMA_Cmd(dmaSpec->ref, ENABLE);
+    xDMA_Init(dmaResource, &DMA_InitStructure);
+    xDMA_Cmd(dmaResource, ENABLE);
+
+#ifdef ADC_DMA_ON_DEMAND
+    adcOnDemandAdc = adc.ADCx;
+    adcOnDemandDma = dmaResource;
+    adcOnDemandDmaDescriptor = dmaGetDescriptorByIdentifier(dmaGetIdentifier(dmaResource));
+    adcOnDemandDmaInit = DMA_InitStructure;
+    adcStartOnDemandConversion();
 #else
-    xDMA_Init(adc.dmaResource, &DMA_InitStructure);
-    xDMA_Cmd(adc.dmaResource, ENABLE);
-#endif
-
     ADC_SoftwareStartConv(adc.ADCx);
+#endif
 }
 
 void adcGetChannelValues(void)
 {
+#ifdef ADC_DMA_ON_DEMAND
+    if (!adcOnDemandAdc || !adcOnDemandDma || !adcOnDemandDmaDescriptor) {
+        return;
+    }
+
+    const uint16_t dmaCounter = xDMA_GetCurrDataCounter(adcOnDemandDma);
+    if (adcOnDemandConversionPending && dmaCounter != adcOnDemandDmaCounter) {
+        adcOnDemandConversionPending = false;
+    }
+
+    const bool dmaError = DMA_GET_FLAG_STATUS(adcOnDemandDmaDescriptor, DMA_IT_DMEIF | DMA_IT_TEIF);
+    const bool overrun = ADC_GetFlagStatus(adcOnDemandAdc, ADC_FLAG_OVR) != RESET;
+    const bool timedOut = adcOnDemandConversionPending
+        && cmpTimeUs(micros(), adcOnDemandStartedAt) >= ADC_DMA_ON_DEMAND_TIMEOUT_US;
+
+    if (dmaError || overrun || timedOut) {
+        adcRecoverOnDemandDma();
+        return;
+    }
+
+    if (!adcOnDemandConversionPending) {
+        adcStartOnDemandConversion();
+    }
+#else
     // Nothing to do
+#endif
 }
 #endif
