@@ -300,7 +300,7 @@ FAST_CODE_NOINLINE bool pwmTelemetryDecode(void)
             tmr_dma_request_enable((tmr_type *)dmaMotors[i].timerHardware->tim, dmaMotors[i].timerDmaSource, FALSE);
 #elif defined(X32M7)
             TIM_EnableDma((TIM_TypeDef *)dmaMotors[i].timerHardware->tim, dmaMotors[i].timerDmaSource, DISABLE);
-#else
+#elif !defined(STM32F4)
             TIM_DMACmd((TIM_TypeDef *)dmaMotors[i].timerHardware->tim, dmaMotors[i].timerDmaSource, DISABLE);
 #endif
 
